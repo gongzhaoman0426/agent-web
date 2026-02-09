@@ -5,6 +5,7 @@ import { useChatSession } from '../../hooks/use-chat-sessions'
 import { useAgents } from '../../services/agent.service'
 import { apiClient } from '../../lib/api'
 import { queryKeys } from '../../lib/query-keys'
+import { generateUUID } from '../../lib/uuid'
 import { ChatHeader } from './ChatHeader'
 import { ChatMessages } from './ChatMessages'
 import { ChatInput } from './ChatInput'
@@ -56,7 +57,7 @@ export function ChatPage() {
 
       // 首次消息：前端生成 sessionId
       if (!activeSessionId) {
-        activeSessionId = crypto.randomUUID()
+        activeSessionId = generateUUID()
 
         // 乐观更新侧边栏：立即插入占位会话
         const now = new Date().toISOString()
@@ -75,7 +76,7 @@ export function ChatPage() {
 
       // 乐观更新：立即显示用户消息
       const userMessage: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         role: 'user',
         content,
         sessionId: activeSessionId,
@@ -103,7 +104,7 @@ export function ChatPage() {
         navigate(`/chat/${activeSessionId}?agent=${currentAgentId}`, { replace: true })
       }
 
-      const assistantMsgId = crypto.randomUUID()
+      const assistantMsgId = generateUUID()
       assistantMsgIdRef.current = assistantMsgId
       let assistantCreated = false
 
