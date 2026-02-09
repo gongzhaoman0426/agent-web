@@ -44,4 +44,4 @@ jobs:
           script: |
             docker pull ${{ env.IMAGE_NAME }}:latest
             cd ~/agent-web
-            docker compose up -d
+            docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
