@@ -26,6 +26,7 @@ export default [
     settings: { react: { version: "detect" } },
     rules: {
       ...pluginReactHooks.configs.recommended.rules,
+      "@typescript-eslint/no-explicit-any": "warn",
       "react/react-in-jsx-scope": "off",
       "react/prop-types": "off",
     },
