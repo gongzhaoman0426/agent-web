@@ -17,14 +17,7 @@ import type {
 
 const API_BASE_URL = '/api';
 
-const TOKEN_KEY = 'auth_token';
-
-function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
 function clearAuth() {
-  localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem('auth_user');
   window.location.href = '/login';
 }
@@ -47,24 +40,17 @@ interface PaginatedResponse<T> {
 export type { ApiResponse, PaginatedResponse };
 
 class ApiClient {
-  private getAuthHeaders(): Record<string, string> {
-    const token = getToken();
-    if (token) {
-      return { Authorization: `Bearer ${token}` };
-    }
-    return {};
-  }
-
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
 
     const isFormData = options?.body instanceof FormData;
     const defaultHeaders: Record<string, string> = isFormData
-      ? { ...this.getAuthHeaders() }
-      : { 'Content-Type': 'application/json', ...this.getAuthHeaders() };
+      ? {}
+      : { 'Content-Type': 'application/json' };
 
     try {
       const response = await fetch(url, {
+        credentials: 'include',
         headers: {
           ...defaultHeaders,
           ...options?.headers,
@@ -166,9 +152,9 @@ class ApiClient {
     const url = `${API_BASE_URL}/agents/${id}/chat/stream`;
     const res = await fetch(url, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        ...this.getAuthHeaders(),
       },
       body: JSON.stringify(data),
     });

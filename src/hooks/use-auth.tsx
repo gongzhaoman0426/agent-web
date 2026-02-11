@@ -1,13 +1,11 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
-import type { User, AuthResponse } from '../types';
+import type { User } from '../types';
+import { authClient } from '../lib/auth-client';
 
-const API_BASE_URL = '/api';
-const TOKEN_KEY = 'auth_token';
 const USER_KEY = 'auth_user';
 
 interface AuthContextType {
   user: User | null;
-  token: string | null;
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string) => Promise<void>;
   logout: () => void;
@@ -16,15 +14,43 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-function isTokenExpired(token: string): boolean {
-  try {
-    const parts = token.split('.');
-    if (parts.length < 2) return true;
-    const payload = JSON.parse(atob(parts[1] as string));
-    return payload.exp * 1000 < Date.now();
-  } catch {
-    return true;
+function toAuthEmail(username: string): string {
+  const bytes = new TextEncoder().encode(username);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+
+  const encoded = btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  return `${encoded}@agent.local`;
+}
+
+function getErrorMessage(error: { message?: string; status?: number } | null, fallback: string) {
+  if (!error) return fallback;
+
+  if (error.status === 409) {
+    return '用户名已存在';
   }
+
+  if (typeof error.message === 'string' && error.message.trim()) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
+function normalizeUser(
+  authUser: { id: string; username?: string | null; name?: string | null; email?: string | null },
+  fallbackUsername = '',
+): User {
+  return {
+    id: authUser.id,
+    username: authUser.username || authUser.name || authUser.email || fallbackUsername,
+  };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -40,67 +66,77 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return null;
   });
 
-  const [token, setToken] = useState<string | null>(() => {
-    const stored = localStorage.getItem(TOKEN_KEY);
-    if (stored && !isTokenExpired(stored)) {
-      return stored;
-    }
-    if (stored) {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(USER_KEY);
-    }
-    return null;
-  });
-
-  // 启动时检查 token 是否过期
+  // 启动时用 better-auth session 校准本地用户态
   useEffect(() => {
-    if (token && isTokenExpired(token)) {
-      setToken(null);
-      setUser(null);
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(USER_KEY);
-    }
-  }, [token]);
+    let isActive = true;
 
-  const handleAuthResponse = useCallback((data: AuthResponse) => {
-    setToken(data.access_token);
-    setUser(data.user);
-    localStorage.setItem(TOKEN_KEY, data.access_token);
-    localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+    void authClient.getSession()
+      .then(({ data }) => {
+        if (!isActive) return;
+
+        if (!data?.user) {
+          setUser(null);
+          localStorage.removeItem(USER_KEY);
+          return;
+        }
+
+        const normalizedUser = normalizeUser(data.user);
+        setUser(normalizedUser);
+        localStorage.setItem(USER_KEY, JSON.stringify(normalizedUser));
+      })
+      .catch(() => {
+        if (!isActive) return;
+        setUser(null);
+        localStorage.removeItem(USER_KEY);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  const handleAuthResponse = useCallback((
+    authUser: { id: string; username?: string | null; name?: string | null; email?: string | null },
+    fallbackUsername: string,
+  ) => {
+    const normalizedUser = normalizeUser(authUser, fallbackUsername);
+    setUser(normalizedUser);
+    localStorage.setItem(USER_KEY, JSON.stringify(normalizedUser));
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
-    const res = await fetch(`${API_BASE_URL}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+    const normalizedUsername = username.trim();
+    const { data, error } = await authClient.signIn.username({
+      username: normalizedUsername,
+      password,
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || '登录失败');
+
+    if (error || !data?.token || !data.user) {
+      throw new Error(getErrorMessage(error, '登录失败'));
     }
-    const data: AuthResponse = await res.json();
-    handleAuthResponse(data);
+
+    handleAuthResponse(data.user, normalizedUsername);
   }, [handleAuthResponse]);
 
   const register = useCallback(async (username: string, password: string) => {
-    const res = await fetch(`${API_BASE_URL}/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+    const normalizedUsername = username.trim();
+    const { data, error } = await authClient.signUp.email({
+      name: normalizedUsername,
+      username: normalizedUsername,
+      email: toAuthEmail(normalizedUsername),
+      password,
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || '注册失败');
+
+    if (error || !data?.token || !data.user) {
+      throw new Error(getErrorMessage(error, '注册失败'));
     }
-    const data: AuthResponse = await res.json();
-    handleAuthResponse(data);
+
+    handleAuthResponse(data.user, normalizedUsername);
   }, [handleAuthResponse]);
 
   const logout = useCallback(() => {
-    setToken(null);
+    void authClient.signOut();
     setUser(null);
-    localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
   }, []);
 
@@ -108,11 +144,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         user,
-        token,
         login,
         register,
         logout,
-        isAuthenticated: !!token,
+        isAuthenticated: !!user,
       }}
     >
       {children}
